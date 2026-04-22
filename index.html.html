@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能施工日志系统 - 极客版 / 全能版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
+    <style>
+        body { background-color: #f0f4f8; }
+        .log-preview { font-family: 'Courier New', Courier, monospace; white-space: pre-wrap; line-height: 1.6; }
+        .html2pdf__page-break { page-break-before: always; }
+        input[type="file"] { display: none; }
+        .search-icon { position: absolute; left: 10px; top: 10px; color: #9ca3af; }
+        /* 美化录音波纹动画 */
+        .recording-pulse {
+            animation: pulse-ring 1.25s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+    </style>
+</head>
+<body class="text-gray-800 pb-10">
+
+<!-- 用于批量生成 PDF 的真正全屏渲染遮罩 -->
+<div id="batchExportOverlay" class="hidden fixed inset-0 z-[9999] bg-gray-100 overflow-y-auto w-full h-full">
+    <div class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-blue-900 text-white px-6 py-4 rounded-xl shadow-2xl z-50 text-center font-bold text-lg w-10/12 max-w-sm border-4 border-blue-400">
+        <i class="fas fa-file-pdf text-4xl mb-3 block animate-bounce"></i>
+        <div class="flex items-center justify-center space-x-2"><i class="fas fa-circle-notch fa-spin"></i><span>全速拼接多页周报中...</span></div>
+        <span class="text-xs font-normal text-blue-200 mt-2 block">排版与渲染期间，请紧盯本页面勿离开</span>
+    </div>
+    <!-- html2canvas的真正截图目标，必须完全可见 -->
+    <div id="batchExportContainer" class="bg-white mx-auto w-[800px] max-w-full p-8 text-black my-8 shadow-xl relative min-h-[1080px] pb-20"></div>
+</div>
+
+<div class="container mx-auto p-4 max-w-6xl">
+    <header class="mb-6 flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border-t-4 border-blue-600">
+        <h1 class="text-xl md:text-2xl font-bold text-blue-800"><i class="fas fa-hard-hat mr-2"></i>全能施工日志系统</h1>
+        <span class="text-xs md:text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">v7.0 极客版 (包含语音/多图/批量)</span>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        <!-- 左侧：输入表单 -->
+        <div class="bg-white p-6 rounded-xl shadow-md border border-gray-100 flex flex-col h-full">
+            <h2 class="text-lg font-bold mb-4 text-gray-700 border-b pb-2"><i class="fas fa-pen mr-2"></i>1. 录入今日工作</h2>
+            <form id="logForm" class="space-y-4 flex-1">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-600">日期</label>
+                        <input type="date" id="date" class="mt-1 w-full border border-gray-300 rounded-md p-2 bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 transition">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-600">天气 / 气温</label>
+                        <input type="text" id="weather" placeholder="例：晴 25℃" class="mt-1 w-full border border-gray-300 rounded-md p-2 bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 transition">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-gray-600">施工部位</label>
+                    <input type="text" id="location" placeholder="例：3号楼5层" class="mt-1 w-full border border-gray-300 rounded-md p-2 bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 transition">
+                </div>
+                <div>
+                    <!-- 语音输入 -->
+                    <div class="flex items-center justify-between mb-1">
+                        <label class="block text-sm font-semibold text-gray-600">现场流水账</label>
+                        <button type="button" id="voiceBtn" onclick="toggleVoice()" class="text-green-600 hover:text-green-700 bg-green-50 px-2 py-1 rounded-md text-xs font-bold transition flex items-center">
+                            <i id="voiceIcon" class="fas fa-microphone mr-1"></i> <span id="voiceText">按住 语音输入</span>
+                        </button>
+                    </div>
+                    <textarea id="workContent" rows="4" placeholder="1. 绑扎柱钢筋&#10;2. 浇筑混凝土" class="w-full border border-gray-300 rounded-md p-2 bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 transition shadow-inner"></textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-gray-600">材料进场</label>
+                    <input type="text" id="material" placeholder="例：进场钢筋5吨" class="mt-1 w-full border border-gray-300 rounded-md p-2 bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 transition">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-gray-600">质量与安全隐患</label>
+                    <input type="text" id="issues" placeholder="例：班前安全教育" class="mt-1 w-full border border-gray-300 rounded-md p-2 bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 transition">
+                </div>
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="block text-sm font-semibold text-gray-600">现场照片 (支持多图九宫格)</label>
+                        <span id="fileName" class="text-xs text-gray-400">未选择图片</span>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <!-- multiple 属性允许选多图 -->
+                        <label class="cursor-pointer bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-semibold py-2 px-4 rounded shadow-sm transition">
+                            <i class="fas fa-camera text-blue-500 mr-2"></i> 上传图片
+                            <input type="file" id="photoInput" accept="image/*" multiple onchange="handleMultipleImages(this)">
+                        </label>
+                        <button type="button" onclick="clearImages()" class="text-xs text-red-400 hover:text-red-600 hidden" id="clearImagesBtn"><i class="fas fa-times"></i> 清空已选</button>
+                    </div>
+                    <div id="miniImgPreview" class="flex flex-wrap gap-2 mt-2"></div>
+                </div>
+                
+                <!-- 底部按钮悬浮布局 -->
+                <div class="pt-4 flex space-x-3 mt-auto">
+                    <button type="button" onclick="generateLog()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition transform hover:-translate-y-0.5">
+                        <i class="fas fa-magic mr-2"></i> 生成单日台账
+                    </button>
+                    <button type="button" onclick="resetForm()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 px-4 rounded-lg transition">重置</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- 右侧：预览与历史 -->
+        <div class="flex flex-col gap-6">
+            <!-- 预览区 -->
+            <div id="previewCard" class="bg-white p-6 rounded-xl shadow-md border border-gray-100 hidden relative">
+                <!-- 关闭按钮 -->
+                <button onclick="closePreview()" class="absolute right-4 top-4 text-gray-400 hover:text-gray-700 bg-gray-100 rounded-full w-8 h-8 flex items-center justify-center transition">
+                    <i class="fas fa-times"></i>
+                </button>
+                
+                <div class="flex justify-between items-center mb-4 border-b pb-2 pr-8">
+                    <h2 class="text-lg font-bold text-green-700"><i class="fas fa-eye mr-2"></i>今日预览</h2>
+                    <div class="flex gap-2">
+                        <button id="pdfExportBtn" onclick="downloadPDF()" class="text-xs bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded shadow transition flex items-center">
+                            <i class="fas fa-file-pdf mr-1"></i> 保存此篇
+                        </button>
+                        <button onclick="saveLog()" class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded shadow transition">
+                            <i class="fas fa-save mr-1"></i> 加入目录
+                        </button>
+                    </div>
+                </div>
+                <div id="exportArea" class="bg-white p-5 rounded border border-gray-200">
+                    <div id="logResult" class="log-preview text-sm text-gray-900 border-b border-dashed border-gray-300 pb-4"></div>
+                    <div id="finalImgContainer" class="mt-4 hidden break-inside-avoid">
+                        <p class="text-xs text-gray-500 mb-2 font-bold">【现场附图】</p>
+                        <!-- 多图画廊容器 -->
+                        <div id="finalImgGrid" class="grid gap-2"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 目录区 -->
+            <div class="bg-white p-6 rounded-xl shadow-md border border-gray-100 flex-1 flex flex-col h-full max-h-[800px]">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 border-b pb-3 gap-3">
+                    <h2 class="text-lg font-bold text-gray-800 shrink-0"><i class="fas fa-box-archive mr-2 text-indigo-500"></i>3. 台账时光轴</h2>
+                    <div class="flex flex-wrap gap-2 w-full justify-end">
+                        <!-- 极客功能：打包备份 -->
+                        <button onclick="backupData()" class="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1.5 rounded" title="备份到本地文件">
+                            <i class="fas fa-download"></i> 备份
+                        </button>
+                        <label class="cursor-pointer text-xs text-teal-600 bg-teal-50 hover:bg-teal-100 px-2 py-1.5 rounded" title="从文件恢复历史数据">
+                            <i class="fas fa-upload"></i> 恢复 <input type="file" accept=".json" class="hidden" onchange="restoreData(this)">
+                        </label>
+                        <button onclick="clearAllLogs()" class="text-xs text-red-500 bg-red-50 hover:bg-red-100 px-2 py-1.5 rounded" title="清空全部">清空库</button>
+                    </div>
+                </div>
+
+                <!-- 搜索与批量操作工具栏 -->
+                <div class="flex items-center gap-2 mb-4 bg-gray-50 p-2 rounded-lg border border-gray-100">
+                    <div class="relative flex-1">
+                        <i class="fas fa-search search-icon text-gray-400"></i>
+                        <input type="text" id="searchInput" oninput="searchLogs()" placeholder="查部位/事件..." class="w-full border-none rounded py-1 pl-8 text-sm bg-transparent outline-none">
+                    </div>
+                    <!-- 极客功能：周报合并 -->
+                    <div class="border-l pl-2 flex items-center gap-2">
+                        <label class="text-xs text-gray-600 cursor-pointer flex items-center">
+                            <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)" class="mr-1 w-3 h-3 text-blue-600 rounded">
+                            全选
+                        </label>
+                        <button onclick="exportBatchPDF()" class="text-xs bg-indigo-500 hover:bg-indigo-600 text-white rounded px-3 py-1.5 transition flex items-center shadow-sm">
+                            <i class="fas fa-layer-group mr-1.5"></i> 批量周报
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 列表容器 -->
+                <div id="historyList" class="space-y-4 overflow-y-auto pr-2 relative flex-1 min-h-[300px]"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('date').valueAsDate = new Date();
+    // 存储经过前端压缩过的 Base64 图片数组
+    let currentImagesBase64 = [];
+    
+    // --- 【极客功能1：语音转文字】 ---
+    let recognizer = null;
+    let isRecording = false;
+
+    // 尝试初始化 Speech API
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+        recognizer = new SpeechRecognition();
+        recognizer.lang = 'zh-CN';
+        recognizer.continuous = true;
+        recognizer.interimResults = true;
+
+        recognizer.onresult = function(event) {
+            let finalOutput = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                if (event.results[i].isFinal) {
+                    finalOutput += event.results[i][0].transcript + "，";
+                }
+            }
+            if (finalOutput) {
+                const workBox = document.getElementById('workContent');
+                workBox.value += finalOutput;
+                workBox.scrollTop = workBox.scrollHeight;
+            }
+        };
+
+        recognizer.onend = function() {
+            if (isRecording) recognizer.start(); // 如果被系统截断则自动续借
+        };
+    } else {
+        document.getElementById('voiceBtn').style.display = 'none'; // 浏览器不支持则隐藏
+    }
+
+    function toggleVoice() {
+        const btn = document.getElementById('voiceBtn');
+        const icon = document.getElementById('voiceIcon');
+        const textStr = document.getElementById('voiceText');
+
+        if (!recognizer) return alert("您的浏览器不支持语音输入，请使用自带浏览器的最新版。");
+
+        if (isRecording) {
+            // 停止录音
+            recognizer.stop();
+            isRecording = false;
+            btn.classList.remove('recording-pulse', 'bg-red-100', 'text-red-600');
+            btn.classList.add('bg-green-50', 'text-green-600');
+            icon.classList.remove('fa-stop-circle', 'text-red-600');
+            icon.classList.add('fa-microphone');
+            textStr.innerText = "按住 语音输入";
+        } else {
+            // 开始录音
+            try { recognizer.start(); } catch(e){}
+            isRecording = true;
+            btn.classList.remove('bg-green-50', 'text-green-600');
+            btn.classList.add('recording-pulse', 'bg-red-100', 'text-red-600');
+            icon.classList.remove('fa-microphone');
+            icon.classList.add('fa-stop-circle', 'text-red-600');
+            textStr.innerText = "正在倾听 (点击停止)";
+        }
+    }
+
+
+    // --- 【极客功能2：多图九宫格与自动压缩】 ---
+    
+    // 压缩单张图片的 Promise 工具函数，控制 localStorage 容量防止崩溃
+    function compressImage(file, maxSize = 1200, quality = 0.6) {
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    let width = img.width;
+                    let height = img.height;
+                    
+                    // 等比例缩放降低分辨率
+                    if (width > height) {
+                        if (width > maxSize) { height = Math.round(height *= maxSize / width); width = maxSize; }
+                    } else {
+                        if (height > maxSize) { width = Math.round(width *= maxSize / height); height = maxSize; }
+                    }
+                    
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL('image/jpeg', quality)); // 强压缩
+                }
+                img.src = e.target.result;
+            }
+            reader.readAsDataURL(file);
+        });
+    }
+
+    async function handleMultipleImages(input) {
+        if (!input.files || input.files.length === 0) return;
+        
+        currentImagesBase64 = []; // 每次选择新图片清空旧的
+        const miniContainer = document.getElementById('miniImgPreview');
+        miniContainer.innerHTML = '<span class="text-xs text-blue-500"><i class="fas fa-spinner fa-spin"></i> 正在压缩提取图片...</span>';
+        
+        const files = Array.from(input.files).slice(0, 9); // 最多拿 9 张
+        
+        // 并发压缩所有选中的图片
+        await Promise.all(files.map(file => compressImage(file))).then(compressedBase64Array => {
+            currentImagesBase64 = compressedBase64Array;
+        });
+
+        // 刷新微型缩略图 UI
+        miniContainer.innerHTML = '';
+        currentImagesBase64.forEach(src => {
+            miniContainer.innerHTML += `<div class="w-10 h-10 rounded border overflow-hidden inline-block shadow-sm"><img src="${src}" class="w-full h-full object-cover"></div>`;
+        });
+        
+        document.getElementById('fileName').innerHTML = `<span class="text-green-600 font-bold">已就绪 ${currentImagesBase64.length} 张图</span>`;
+        document.getElementById('clearImagesBtn').classList.remove('hidden');
+    }
+
+    function clearImages() {
+        document.getElementById('photoInput').value = '';
+        currentImagesBase64 = [];
+        document.getElementById('miniImgPreview').innerHTML = '';
+        document.getElementById('fileName').innerText = "未选择图片";
+        document.getElementById('clearImagesBtn').classList.add('hidden');
+    }
+
+    function resetForm() {
+        if(isRecording) toggleVoice();
+        document.getElementById('logForm').reset();
+        document.getElementById('date').valueAsDate = new Date();
+        clearImages();
+        closePreview();
+    }
+    
+    function closePreview() {
+        document.getElementById('previewCard').classList.add('hidden');
+    }
+
+
+    // --- 核心逻辑：生成防空白、多图排版 ---
+    function generateLog() {
+        const date = document.getElementById('date').value;
+        const weather = document.getElementById('weather').value || "______";
+        const location = document.getElementById('location').value || "______";
+        const workRaw = document.getElementById('workContent').value;
+        const materialRaw = document.getElementById('material').value;
+        const issuesRaw = document.getElementById('issues').value;
+
+        if (!date || !workRaw) return alert("⚠️ [现场流水账] 是必填的！");
+
+        const weekDays = ['日','一','二','三','四','五','六'];
+        const weekDay = '星期' + weekDays[new Date(date).getDay()];
+        
+        let processedWork = workRaw.split('\n').map(line => line.trim() ? `   - ${line.trim().replace(/完了/g, '完成')}` : '').filter(Boolean).join('\n');
+        let extraQC = (workRaw.includes("混凝土") || workRaw.includes("砼")) ? `   - 提示：混凝土浇筑完毕后按要求成型标准养护试块。\n` : "";
+
+        // 组合文本
+        const logText = `【施工日志记录表】
+=================================================
+日期：${date} | ${weekDay} | 天气：${weather}
+=================================================
+
+一、生产实施进度：
+1. 施工区位/名称：${location}
+2. 当日具体作业详情：
+${processedWork}
+
+二、质量监督与安全管控：
+   - ${issuesRaw ? issuesRaw : "现场全天跟班巡查正常，临边洞口防护完好，无违章违规作业。"}
+${extraQC}
+三、耗材与大型设备使用：
+   - ${materialRaw ? materialRaw : "设备运转正常，今日无主要大宗材料进场。"}
+
+四、验收及其他零星协调事项：
+   - 无。
+=================================================`;
+
+        document.getElementById('logResult').innerText = logText;
+        document.getElementById('previewCard').classList.remove('hidden');
+        
+        // --- 核心改动：支持九宫格的多图画布排列 ---
+        const finalImgContainer = document.getElementById('finalImgContainer');
+        const finalImgGrid = document.getElementById('finalImgGrid');
+        finalImgGrid.innerHTML = ''; // 清除旧的预览
+        
+        if (currentImagesBase64.length > 0) {
+            // 根据图片数量动态调整 Grid 布局
+            if (currentImagesBase64.length === 1) {
+                finalImgGrid.className = "grid grid-cols-1 gap-2";
+            } else if (currentImagesBase64.length <= 4) {
+                finalImgGrid.className = "grid grid-cols-2 gap-2";
+            } else {
+                finalImgGrid.className = "grid grid-cols-3 gap-2";
+            }
+            
+            // 插入图片
+            currentImagesBase64.forEach(src => {
+                finalImgGrid.innerHTML += `
+                    <div class="border rounded-md shadow p-1 bg-gray-50 flex items-center justify-center break-inside-avoid">
+                        <img src="${src}" class="max-w-full h-auto rounded object-cover" style="max-height:350px;">
+                    </div>`;
+            });
+            finalImgContainer.classList.remove('hidden');
+        } else {
+            finalImgContainer.classList.add('hidden');
+        }
+        
+        // 手机端自动滚动
+        if(window.innerWidth < 1024) {
+             try { document.getElementById('previewCard').scrollIntoView({ behavior: 'smooth' }); } 
+             catch(e) { document.getElementById('previewCard').scrollIntoView(); }
+        }
+    }
+
+
+    // --- 极客功能3：导出一份或者批量周报导出 PDF ---
+    
+    // 执行真正的 HTML 转 PDF 工具函数
+    function executeHTML2PDF(element, filename, btnEle, originalBtnHTML) {
+        if (typeof html2pdf === 'undefined') {
+            alert("PDF组件加载失败，请换个网络重试！");
+            if(btnEle) { btnEle.innerHTML = originalBtnHTML; btnEle.disabled = false; }
+            return;
+        }
+
+        element.style.backgroundColor = '#ffffff'; // 强制白纸黑字格式
+        const opt = {
+            margin:       12,
+            filename:     `${filename}_${new Date().getTime().toString().substr(-4)}.pdf`,
+            image:        { type: 'jpeg', quality: 0.95 },
+            html2canvas:  { scale: 2, scrollY: 0, useCORS: true, backgroundColor: '#ffffff' },
+            jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak:    { mode: ['css', 'legacy'] } // 识别我们设置的分页符
+        };
+
+        try {
+            html2pdf().set(opt).from(element).save().then(() => {
+                if(btnEle) { btnEle.innerHTML = originalBtnHTML; btnEle.disabled = false; }
+                element.style.backgroundColor = ''; 
+                // 清理隐形容器（如果是批量合并的）
+                if(element.id === 'batchExportContainer'){
+                    element.innerHTML = '';
+                    document.getElementById('batchExportOverlay').classList.add('hidden');
+                }
+            }).catch(err => {
+                console.error("PDF Export: ", err);
+                alert("生成失败，如果是图片太多导致，请减少单篇图片！");
+                if(btnEle) { btnEle.innerHTML = originalBtnHTML; btnEle.disabled = false; }
+                if(element.id === 'batchExportContainer'){
+                    document.getElementById('batchExportOverlay').classList.add('hidden');
+                }
+            });
+        } catch(e) {
+            alert("组件运行错误，建议使用桌面版 Chrome 或自带浏览器。");
+            if(btnEle) { btnEle.innerHTML = originalBtnHTML; btnEle.disabled = false; }
+            if(element.id === 'batchExportContainer'){
+                 document.getElementById('batchExportOverlay').classList.add('hidden');
+            }
+        }
+    }
+
+    // 存单篇 PDF
+    function downloadPDF() {
+        const btn = document.getElementById('pdfExportBtn');
+        const element = document.getElementById('exportArea');
+        const textContent = document.getElementById('logResult').innerText;
+        const dateMatch = textContent.match(/日期：(.*?)\s*\|/);
+        const fileNameDate = dateMatch ? dateMatch[1].trim().replace(/\//g, '-') : document.getElementById('date').value;
+
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>';
+        btn.disabled = true;
+
+        setTimeout(() => executeHTML2PDF(element, `施工台账_${fileNameDate}`, btn, originalText), 100);
+    }
+
+    // 全选交互逻辑
+    function toggleSelectAll(sourceCheck) {
+        document.querySelectorAll('.log-checkbox').forEach(chk => {
+            chk.checked = sourceCheck.checked;
+        });
+    }
+
+    // ★★★ 核心新增：合并选中的多篇记录成一份长长的 PDF 周报 ★★★
+    function exportBatchPDF() {
+        const btn = document.querySelector('button[onclick="exportBatchPDF()"]');
+        const checkboxes = document.querySelectorAll('.log-checkbox:checked');
+        if (checkboxes.length === 0) return alert("请先勾选需要合并的日志目录！");
+        
+        const logs = JSON.parse(localStorage.getItem('constructionLogs') || "[]");
+        // 把选中的 id 全找出来
+        const selectedIds = Array.from(checkboxes).map(c => Number(c.value));
+        
+        // 从库中筛选，并在内存中重新排序为旧日期在前（写汇总报告的正常顺序）
+        const selectedLogs = logs.filter(l => selectedIds.includes(l.id))
+                                 .sort((a,b) => new Date(a.date) - new Date(b.date));
+
+        // 构建一个超大的串联 HTML
+        const overlay = document.getElementById('batchExportOverlay');
+        const container = document.getElementById('batchExportContainer');
+        overlay.classList.remove('hidden'); // 唤出遮罩层，让底层白纸DOM彻底曝光在阳光下以便截图
+
+        container.innerHTML = `<h1 style="text-align:center; font-size: 24px; font-weight: bold; margin-bottom: 20px;">施工单位阶段性施工汇总台账</h1>
+                               <p style="text-align:center; font-size: 14px; margin-bottom: 40px;">共提取 ${selectedLogs.length} 份记录</p>`;
+
+        selectedLogs.forEach((l, index) => {
+            // 拼凑图片长条栏或九宫格
+            let imgsHTML = '';
+            if (l.images && l.images.length > 0) {
+                // 如果是新版代码保存的数组
+                let gridClass = l.images.length > 1 ? (l.images.length > 3 ? "grid-template-columns: repeat(3, 1fr)" : "grid-template-columns: repeat(2, 1fr)") : "grid-template-columns: repeat(1, 1fr)";
+                imgsHTML = `
+                    <div style="font-size: 12px; color: gray; margin-bottom: 10px; font-weight: bold;">【附图核实区】</div>
+                    <div style="display: grid; gap: 10px; ${gridClass};">
+                        ${l.images.map(img => `<div style="border:1px solid #eee; padding:5px;"><img src="${img}" style="width: 100%; height: auto; max-height:200px; object-fit: cover;"></div>`).join('')}
+                    </div>
+                `;
+            } else if (l.image) {
+                // 兼容旧版的单图字符串保存逻辑
+                imgsHTML = `
+                    <div style="font-size: 12px; color: gray; margin-bottom: 10px; font-weight: bold;">【附图核实区】</div>
+                    <div style="border:1px solid #eee; padding:5px;"><img src="${l.image}" style="width: 100%; height: auto; max-height: 350px;"></div>
+                `;
+            }
+
+            // 最后一页不需要强制截断页面
+            const pageBreakClass = (index !== selectedLogs.length - 1) ? 'html2pdf__page-break' : '';
+
+            const pageHTML = `
+                <div class="${pageBreakClass}" style="margin-bottom: 40px; padding-bottom: 30px; border-bottom: 2px dashed #ccc;">
+                    <div class="log-preview" style="font-family: 'Courier New', Courier, monospace; white-space: pre-wrap; line-height: 1.8; font-size: 14px; margin-bottom:20px;">${l.text}</div>
+                    ${imgsHTML}
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', pageHTML);
+        });
+
+        // 修改按钮状态
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1.5"></i> 生成中...';
+        btn.disabled = true;
+
+        // 触发下载，包裹在 setTimeout 中让浏览器有时间将 display:block 的 DOM 渲染好
+        setTimeout(() => {
+            executeHTML2PDF(container, `施工阶段性周报合集[共${selectedLogs.length}份]`, btn, originalText);
+        }, 150);
+    }
+
+
+
+    // --- 本地目录核心库 ---
+    function saveLog() {
+        // 由于全面升级到多图配置，保存格式变为 .images: [] 数组。通过兼容层兼任老代码的 .image
+        const logData = {
+            id: Date.now(),
+            date: document.getElementById('date').value,
+            location: document.getElementById('location').value || "未知区域",
+            text: document.getElementById('logResult').innerText,
+            images: currentImagesBase64, // 新的多图数组
+        };
+
+        let logs = JSON.parse(localStorage.getItem('constructionLogs') || "[]");
+        
+        const existingIndex = logs.findIndex(l => l.date === logData.date);
+        if (existingIndex > -1) {
+            if(!confirm(`⚠️ ${logData.date} 已经有记录了。是否保存为新记录？`)) return;
+        }
+
+        logs.push(logData); 
+        try {
+            localStorage.setItem('constructionLogs', JSON.stringify(logs));
+            document.getElementById('searchInput').value = ''; 
+            loadHistory(); 
+            // 存完后清除表格选中的照片避免体积溢出
+            clearImages();
+        } catch (e) {
+            alert("❌ 保存失败！内存极有可能已满（LocalStorage超出5MB限制）。由于压缩代码已经上线，请清理历史遗留垃圾或直接点击【备份导出】清空手机。");
+        }
+    }
+
+
+    // 极客功能4：JSON数据导入与导出备份
+    function backupData() {
+        const data = localStorage.getItem('constructionLogs');
+        if(!data || data === '[]') return alert("没有任何日志，不需要备份。");
+        const blob = new Blob([data], {type: "application/json"});
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `施工日志数据库备份_${new Date().toLocaleDateString().replace(/\//g,'-')}.json`;
+        link.click();
+    }
+
+    function restoreData(input) {
+        const file = input.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const importedLogs = JSON.parse(e.target.result);
+                if(Array.isArray(importedLogs)){
+                    if(confirm(`检测到有 ${importedLogs.length} 篇备份数据，确认将其并入您现在的手机中吗？`)){
+                        let existingLogs = JSON.parse(localStorage.getItem('constructionLogs') || "[]");
+                        
+                        importedLogs.forEach(i => {
+                            // 去重逻辑
+                            if(!existingLogs.find(e => e.id === i.id || (e.date === i.date && e.text === i.text))) {
+                                existingLogs.push(i);
+                            }
+                        })
+                        localStorage.setItem('constructionLogs', JSON.stringify(existingLogs));
+                        loadHistory();
+                        alert("数据恢复并入成功！");
+                    }
+                }
+            } catch(e) { alert("导入失败！这不是一个合法的备份文件！"); }
+        }
+        reader.readAsText(file);
+        input.value = ''; // allow re-select
+    }
+
+    function loadHistory() {
+        const logs = JSON.parse(localStorage.getItem('constructionLogs') || "[]");
+        renderDirectory(logs);
+    }
+
+    function renderDirectory(logsArray) {
+        const listContainer = document.getElementById('historyList');
+        listContainer.innerHTML = "";
+        
+        if (logsArray.length === 0) {
+            document.getElementById('selectAllCheckbox').checked = false;
+            listContainer.innerHTML = `
+                <div class="text-center text-gray-400 py-16 flex flex-col justify-center items-center">
+                    <i class="fas fa-inbox text-4xl mb-3 text-gray-300"></i>
+                    <p class="text-sm tracking-widest uppercase">库里干干净净</p>
+                </div>`;
+            return;
+        }
+        
+        logsArray.sort((a, b) => new Date(b.date) - new Date(a.date));
+        let currentMonth = "";
+
+        logsArray.forEach(log => {
+            const d = new Date(log.date);
+            const monthStr = isNaN(d) ? "未知月份记录" : `${d.getFullYear()}年 ${d.getMonth() + 1}月`;
+            
+            // 渲染固定吸顶的分类表头
+            if (monthStr !== currentMonth) {
+                currentMonth = monthStr;
+                listContainer.insertAdjacentHTML('beforeend', `
+                    <div class="sticky top-0 bg-white/95 backdrop-blur z-10 py-1.5 border-b border-gray-100 mb-3 mt-4 flex items-center pl-2 shadow-[0_4px_6px_-6px_rgba(0,0,0,0.1)]">
+                        <i class="far fa-calendar-alt text-indigo-500 mr-2 text-sm"></i>
+                        <h3 class="text-sm font-bold text-gray-700 tracking-wide">${currentMonth}</h3>
+                        <span class="ml-auto text-xs font-bold bg-indigo-50 text-indigo-500 px-2.5 py-0.5 rounded-full mr-1">${logsArray.filter(l => new Date(l.date).getFullYear() === d.getFullYear() && new Date(l.date).getMonth() === d.getMonth()).length} 篇</span>
+                    </div>
+                `);
+            }
+
+            // 新版包含多张图片逻辑(images)，以及兼用老版逻辑(image)
+            const imgCount = (log.images ? log.images.length : (log.image ? 1 : 0));
+            const hasImg = imgCount > 0 ? `<span class="text-[10px] bg-green-50 text-green-700 font-bold px-1 py-0.5 rounded ml-2 border border-green-200"><i class="fas fa-images"></i> ${imgCount}图</span>` : '';
+            
+            let snippet = log.text.split('\n').slice(8, 12).join(' ').replace(/   -/g, '').trim();
+            snippet = snippet.length > 20 ? snippet.substring(0, 20) + '...' : snippet;
+
+            const itemHTML = `
+                <div class="relative pl-7 border-l-2 border-indigo-200 pb-5 ml-2 hover:border-indigo-400 transition-colors group">
+                    <div class="absolute w-3.5 h-3.5 bg-indigo-500 rounded-full -left-[8.5px] top-1.5 border-2 border-white shadow-sm"></div>
+                    <div class="bg-white border border-gray-100 p-3 rounded-lg shadow-sm hover:shadow-md transition">
+                        <div class="flex justify-between items-start mb-1.5">
+                            <!-- 引入用于批量的 Checkbox -->
+                            <div class="flex items-center">
+                                <input type="checkbox" value="${log.id}" class="log-checkbox mr-2 w-3.5 h-3.5 text-blue-600 rounded cursor-pointer accent-blue-500">
+                                <h4 class="font-bold text-gray-800 text-sm tracking-wide cursor-pointer hover:text-blue-600 transition" onclick="viewLog(${log.id})">${log.date.split('-').slice(1).join('-')}</h4>
+                            </div>
+                            <button onclick="deleteLog(${log.id})" class="text-gray-300 hover:text-red-500 transition px-2" title="彻底删除本条记录"><i class="fas fa-trash-alt"></i></button>
+                        </div>
+                        <div class="mb-2 text-xs text-gray-500 font-medium">📌 ${log.location} ${hasImg}</div>
+                        <p class="text-[11px] text-gray-400 mb-3 bg-gray-50 p-2 rounded leading-relaxed border border-gray-100">${snippet}</p>
+                        <button onclick="viewLog(${log.id})" class="text-xs bg-white text-indigo-500 hover:bg-indigo-50 border border-indigo-100 px-3 py-1.5 rounded transition w-full text-center font-bold">
+                            从库中读取记录并排版
+                        </button>
+                    </div>
+                </div>`;
+            listContainer.insertAdjacentHTML('beforeend', itemHTML);
+        });
+    }
+
+    function searchLogs() {
+        const keyword = document.getElementById('searchInput').value.toLowerCase().trim();
+        const allLogs = JSON.parse(localStorage.getItem('constructionLogs') || "[]");
+        if (!keyword) { renderDirectory(allLogs); return; }
+        const filteredLogs = allLogs.filter(log => {
+            return (log.date && log.date.includes(keyword)) ||
+                   (log.location && log.location.toLowerCase().includes(keyword)) ||
+                   (log.text && log.text.toLowerCase().includes(keyword));
+        });
+        renderDirectory(filteredLogs);
+    }
+
+    // 老式的预览读取
+    function viewLog(id) {
+        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) { window.scrollTo(0, 0); }
+        
+        const logs = JSON.parse(localStorage.getItem('constructionLogs') || "[]");
+        const log = logs.find(l => l.id == id);
+        
+        if (log) {
+            document.getElementById('logResult').innerText = log.text;
+            document.getElementById('previewCard').classList.remove('hidden');
+            
+            const finalImgContainer = document.getElementById('finalImgContainer');
+            const finalImgGrid = document.getElementById('finalImgGrid');
+            finalImgGrid.innerHTML = '';
+            
+            // 兼容新老相册格式加载
+            let loadImages = [];
+            if (log.images && log.images.length > 0) loadImages = log.images;
+            else if (log.image) loadImages = [log.image];
+
+            if (loadImages.length > 0) {
+                if (loadImages.length === 1) finalImgGrid.className = "grid grid-cols-1 gap-2";
+                else if (loadImages.length <= 4) finalImgGrid.className = "grid grid-cols-2 gap-2";
+                else finalImgGrid.className = "grid grid-cols-3 gap-2";
+                
+                loadImages.forEach(src => {
+                    finalImgGrid.innerHTML += `
+                    <div class="border rounded-md shadow p-1 bg-gray-50 flex items-center justify-center break-inside-avoid">
+                        <img src="${src}" class="max-w-full h-auto rounded object-cover" style="max-height:350px;">
+                    </div>`;
+                });
+                
+                finalImgContainer.classList.remove('hidden');
+                // 恢复当前画布的环境以便于存盘或二次编辑
+                currentImagesBase64 = loadImages;
+            } else {
+                finalImgContainer.classList.add('hidden');
+                currentImagesBase64 = [];
+            }
+            
+            if(window.innerWidth < 1024) {
+                 setTimeout(() => { 
+                     try { document.getElementById('previewCard').scrollIntoView({ behavior: 'smooth', block: 'start' }); } 
+                     catch(e) { document.getElementById('previewCard').scrollIntoView(); } 
+                 }, 300);
+            }
+        }
+    }
+
+    function deleteLog(id) {
+        if(confirm("确定永久删除这篇辛苦写完的精华台账吗？真的找不回来！")) {
+            let logs = JSON.parse(localStorage.getItem('constructionLogs') || "[]");
+            logs = logs.filter(l => l.id != id);
+            localStorage.setItem('constructionLogs', JSON.stringify(logs));
+            closePreview();
+            loadHistory();
+        }
+    }
+
+    function clearAllLogs() {
+        if(confirm("高危操作：确定清空你库里所有的心血日志吗？这个操作连后悔药都没得吃，建议先点备份再删！")) {
+            localStorage.removeItem('constructionLogs');
+            closePreview();
+            loadHistory();
+        }
+    }
+
+    window.onload = function() {
+        loadHistory();
+    };
+</script>
+</body>
+</html>
